@@ -1,0 +1,158 @@
+services:
+  mongo-db:
+    image: mongo:4.4-bionic
+    container_name: fiware-mongodb
+    restart: always
+    ports:
+      - "27017:27017"
+    networks: [fiware_net]
+    command: --nojournal
+    volumes:
+      - mongo-data:/data/db
+
+  orion:
+    image: fiware/orion
+    container_name: fiware-orion
+    restart: always
+    ports:
+      - "1026:1026"
+    depends_on: [mongo-db]
+    networks: [fiware_net]
+    command: -dbURI mongodb://mongo-db:27017 -logLevel INFO
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: influxdb
+    restart: always
+    ports:
+      - "8086:8086"
+    networks: [fiware_net]
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin12345
+      DOCKER_INFLUXDB_INIT_ORG: smart_shelter
+      DOCKER_INFLUXDB_INIT_BUCKET: vitals
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: super-secret-token
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    networks: [fiware_net]
+    depends_on: [influxdb]
+    environment:
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+
+  dashboard:
+    build: ./dashboard
+    container_name: shelter-dashboard
+    restart: always
+    ports:
+      - "8501:8501"
+    networks: [fiware_net]
+    environment:
+      - ORION_URL=http://orion:1026
+      - GRAFANA_URL=http://localhost:3000
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=super-secret-token
+      - INFLUX_ORG=smart_shelter
+      - INFLUX_BUCKET=vitals
+      - SMTP_SENDER=kyriakoskyr10@gmail.com
+      - SMTP_PASSWORD=hrixhnlbflvpirlk
+    depends_on: [orion, grafana, influxdb]
+
+  receiver:
+    build: ./receiver
+    container_name: orion-receiver
+    restart: always
+    ports:
+      - "5050:5050"
+    networks: [fiware_net]
+    environment:
+      INFLUX_URL: "http://influxdb:8086"
+      INFLUX_TOKEN: "super-secret-token"
+      INFLUX_ORG: "smart_shelter"
+      INFLUX_BUCKET: "vitals"
+
+  # Real Room MQTT Bridge
+  mqtt-room-bridge:
+    image: python:3.11-slim
+    container_name: mqtt-room-bridge
+    restart: always
+    networks:
+      - fiware_net
+    volumes:
+      - ./mqtt_to_orion_room.py:/app/mqtt_to_orion_room.py:ro
+    working_dir: /app
+    environment:
+      - ORION_URL=http://orion:1026
+      - MQTT_HOST=150.140.186.118
+      - MQTT_PORT=1883
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_TOKEN=super-secret-token
+      - INFLUX_ORG=smart_shelter
+      - INFLUX_BUCKET=vitals
+    command: >
+      sh -c "pip install --no-cache-dir paho-mqtt influxdb-client requests &&
+             python mqtt_to_orion_room.py"
+
+  # Animal Simulation Engine
+  fake-animals-publisher:
+    image: python:3.11-slim
+    container_name: fake-animals-publisher
+    restart: always
+    networks: [fiware_net]
+    depends_on: [orion, influxdb]
+    volumes:
+      - ./fake_animals_to_orion.py:/app/fake_animals_to_orion.py:ro
+    working_dir: /app
+    command: >
+      sh -c "pip install --no-cache-dir paho-mqtt requests influxdb-client &&
+             python fake_animals_to_orion.py"
+    environment:
+      ORION_URL: "http://orion:1026"
+      FIWARE_SERVICE: "smart_shelter"
+      FIWARE_SERVICEPATH: "/"
+      MQTT_HOST: "150.140.186.118"
+      MQTT_PORT: "1883"
+      PERIOD_SEC: "5"
+      ANIMALS_TOPIC: "smart_shelter/animals"
+      INFLUX_URL: "http://influxdb:8086"
+      INFLUX_TOKEN: "super-secret-token"
+      INFLUX_ORG: "smart_shelter"
+      INFLUX_BUCKET: "vitals"
+
+  cctv:
+    image: python:3.11-slim
+    container_name: cctv-stream
+    restart: always
+    ports:
+      - "8080:8080"
+    networks:
+      - fiware_net
+    volumes:
+      - ./cctv:/app
+    working_dir: /app
+    command: >
+      sh -c "apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg &&
+             pip install --no-cache-dir flask opencv-python-headless numpy &&
+             python stream_server.py"
+
+networks:
+  fiware_net:
+    driver: bridge
+
+volumes:
+  mongo-data:
+  influxdb-data:
+  grafana-data:

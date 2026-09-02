@@ -1,0 +1,24 @@
+# Environment variables
+.env
+*.env
+!.env.example
+
+# Docker
+docker-compose.override.yml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode
+.idea
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# HLS segments (keep the directory, but not the streams)
+hls/*.ts
+hls/*.m3u8
